@@ -3,6 +3,45 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
+  const loginForm = document.getElementById("login-form");
+  const logoutButton = document.getElementById("logout-button");
+  const authMessage = document.getElementById("auth-message");
+
+  function getToken() {
+    return localStorage.getItem("activities_access_token");
+  }
+
+  function updateAuthState() {
+    const signedIn = Boolean(getToken());
+    logoutButton.classList.toggle("hidden", !signedIn);
+    signupForm.querySelector("button[type=submit]").disabled = !signedIn;
+  }
+
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const response = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: document.getElementById("login-email").value,
+        password: document.getElementById("login-password").value,
+      }),
+    });
+    const result = await response.json();
+    authMessage.textContent = response.ok ? `Signed in as ${result.role}` : result.detail;
+    authMessage.className = response.ok ? "success" : "error";
+    authMessage.classList.remove("hidden");
+    if (response.ok) {
+      localStorage.setItem("activities_access_token", result.access_token);
+      loginForm.reset();
+      updateAuthState();
+    }
+  });
+
+  logoutButton.addEventListener("click", () => {
+    localStorage.removeItem("activities_access_token");
+    updateAuthState();
+  });
 
   // Function to fetch activities from API
   async function fetchActivities() {
@@ -56,7 +95,7 @@ document.addEventListener("DOMContentLoaded", () => {
         {
           method: "POST",
           headers: {
-            "X-User-Email": email,
+            Authorization: `Bearer ${getToken()}`,
           },
         }
       );
@@ -90,5 +129,6 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // Initialize app
+  updateAuthState();
   fetchActivities();
 });
