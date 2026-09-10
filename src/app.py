@@ -5,7 +5,10 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+import re
+from typing import Annotated
+
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
@@ -77,6 +80,28 @@ activities = {
     }
 }
 
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@mergington\.edu$", re.IGNORECASE)
+
+
+def validate_email(email: str) -> str:
+    normalized_email = email.strip().lower()
+    if not EMAIL_PATTERN.fullmatch(normalized_email):
+        raise HTTPException(
+            status_code=400,
+            detail="A valid @mergington.edu email address is required",
+        )
+    return normalized_email
+
+
+def require_user(user_email: str | None, user_role: str) -> tuple[str, str]:
+    if not user_email:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in before performing this action",
+        )
+
+    return validate_email(user_email), user_role.lower()
+
 
 @app.get("/")
 def root():
@@ -85,12 +110,33 @@ def root():
 
 @app.get("/activities")
 def get_activities():
-    return activities
+    return {
+        name: {
+            **details,
+            "available_spaces": details["max_participants"] - len(details["participants"]),
+            "participants": None,
+        }
+        for name, details in activities.items()
+    }
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(
+    activity_name: str,
+    email: str,
+    user_email: Annotated[str | None, Header(alias="X-User-Email")] = None,
+    user_role: Annotated[str, Header(alias="X-User-Role")] = "student",
+):
     """Sign up a student for an activity"""
+    signed_in_email, signed_in_role = require_user(user_email, user_role)
+    email = validate_email(email)
+
+    if signed_in_role != "admin" and signed_in_email != email:
+        raise HTTPException(
+            status_code=403,
+            detail="Students can only sign themselves up",
+        )
+
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
@@ -98,10 +144,13 @@ def signup_for_activity(activity_name: str, email: str):
     # Get the specific activity
     activity = activities[activity_name]
 
+    if len(activity["participants"]) >= activity["max_participants"]:
+        raise HTTPException(status_code=409, detail="Activity is full")
+
     # Validate student is not already signed up
     if email in activity["participants"]:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail="Student is already signed up"
         )
 
@@ -111,8 +160,22 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(
+    activity_name: str,
+    email: str,
+    user_email: Annotated[str | None, Header(alias="X-User-Email")] = None,
+    user_role: Annotated[str, Header(alias="X-User-Role")] = "student",
+):
     """Unregister a student from an activity"""
+    email = validate_email(email)
+    signed_in_email, signed_in_role = require_user(user_email, user_role)
+
+    if signed_in_role != "admin" and signed_in_email != email:
+        raise HTTPException(
+            status_code=403,
+            detail="Students can only unregister themselves",
+        )
+
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
